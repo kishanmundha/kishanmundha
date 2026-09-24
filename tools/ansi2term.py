@@ -6,8 +6,17 @@ Timing is inferred from the text itself:
   · a line starting with the prompt glyph is typed character by character
   · a line containing a check mark reveals its result tail a beat later
   · everything else fades in on a short beat
+
+By default the text sits on a transparent background with no window, so the page
+around it (GitHub's README box) acts as the frame. --frame adds a background,
+border and title bar, for pages that can't pick a theme-matched image.
+
+--theme auto writes a single SVG that follows the viewer's system light/dark
+setting, for pages whose <picture> can't switch images (npm).
+
+  ansi2term.py [--frame] [--theme dark|light|auto] <in.ansi> <out-THEME.svg>
 """
-import re, sys, html
+import argparse, re, html
 
 THEMES = {
     "dark":  dict(bg="#0E1117", chrome="#171B24", dot="#2C3242", border="#1D2330",
@@ -21,10 +30,26 @@ THEMES = {
 }
 
 FONT, CH, LH = 13.6, 8.16, 19.7
-PADY, BAR = 16, 34
 TYPE, BEAT, RESULT_LAG = 0.019, 0.115, 0.34
 PROMPT, CHECK = "\u276f", "\u2713"
 TOKEN = re.compile(r"\x1b\[([0-9;]*)m")
+
+
+def auto_css():
+    """Dark-mode overrides for an SVG drawn in the light theme.
+
+    CSS beats presentation attributes, so each light color is matched by an
+    attribute selector and swapped for its dark counterpart. That only works
+    while every light color is unique, which is checked here.
+    """
+    light, dark = THEMES["light"], THEMES["dark"]
+    pairs = [("fill", light[k], dark[k]) for k in ("bg", "chrome", "dot", "default")]
+    pairs += [("fill", light["m"][k], dark["m"][k]) for k in light["m"]]
+    fills = [lc for _, lc, _ in pairs]
+    assert len(set(fills)) == len(fills), "light theme colors must be unique"
+    rules = "".join(f'[{attr}="{lc}"]{{{attr}:{dc}}}' for attr, lc, dc in pairs)
+    rules += f'[stroke="{light["border"]}"]{{stroke:{dark["border"]}}}'
+    return f"@media (prefers-color-scheme:dark){{{rules}}}"
 
 
 def parse(line, theme):
@@ -58,11 +83,15 @@ def parse(line, theme):
     return segs
 
 
-def build(lines, theme_name):
-    t = THEMES[theme_name]
+def build(lines, theme_name, frame=False):
+    t = THEMES["light" if theme_name == "auto" else theme_name]
     cols = max((len(TOKEN.sub("", v))
                 for l in lines for v in l.split("\r")), default=60) + 2
-    PADX = 12 if cols <= 46 else 22
+    if frame:
+        BAR, PADX, PADY = 34, (12 if cols <= 46 else 22), 16
+    else:
+        # the ❯ prompt lines up with the left edge of the surrounding text
+        BAR, PADX, PADY = 0, 0, 0
     width = int(PADX * 2 + CH * cols)
     height = int(BAR + PADY * 2 + LH * len(lines))
 
@@ -128,31 +157,47 @@ def build(lines, theme_name):
       .t{{animation:none!important;opacity:1}} .tr{{display:none}}
     }}
     """
+    if theme_name == "auto":
+        css += auto_css()
 
     return "".join([
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
         f'width="{width}" height="{height}" role="img" '
         f'aria-label="Terminal session introducing Kishan Mundha">',
         f'<style>{css}</style>',
-        f'<rect width="{width}" height="{height}" rx="10" fill="{t["bg"]}" '
-        f'stroke="{t["border"]}"/>',
-        f'<path d="M0 10a10 10 0 0 1 10-10h{width - 20}a10 10 0 0 1 10 10v{BAR - 10}H0Z" '
-        f'fill="{t["chrome"]}"/>',
-        "".join(f'<circle cx="{cx}" cy="17" r="5" fill="{t["dot"]}"/>'
-                for cx in (20, 38, 56)),
+        "".join([
+            f'<rect width="{width}" height="{height}" rx="10" fill="{t["bg"]}" '
+            f'stroke="{t["border"]}"/>',
+            f'<path d="M0 10a10 10 0 0 1 10-10h{width - 20}a10 10 0 0 1 10 10v{BAR - 10}H0Z" '
+            f'fill="{t["chrome"]}"/>',
+            "".join(f'<circle cx="{cx}" cy="17" r="5" fill="{t["dot"]}"/>'
+                    for cx in (20, 38, 56)),
+        ]) if frame else "",
         "".join(rendered),
         '</svg>',
     ])
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="ANSI output -> animated SVG, one per theme.")
+    ap.add_argument("--frame", action="store_true",
+                    help="draw a terminal window: background, border and title bar")
+    ap.add_argument("--theme", choices=[*THEMES, "auto"],
+                    help="write only this theme; auto follows the viewer's system "
+                         "setting (default: every fixed theme)")
+    ap.add_argument("input", help="ANSI text file")
+    ap.add_argument("output", help="output path; THEME is replaced by each theme name")
+    args = ap.parse_args()
     # newline="" keeps \r intact — universal-newline mode would eat it, and \r
     # is exactly how a terminal signals "overwrite this line".
-    src = [l for l in open(sys.argv[1], newline="").read().split("\n")]
+    with open(args.input, newline="", encoding="utf-8") as f:
+        src = f.read().split("\n")
     while src and not src[-1].strip():
         src.pop()
     while src and not src[0].strip():
         src.pop(0)
-    for theme in THEMES:
-        open(sys.argv[2].replace("THEME", theme), "w").write(build(src, theme))
-        print("wrote", sys.argv[2].replace("THEME", theme))
+    for theme in [args.theme] if args.theme else THEMES:
+        path = args.output.replace("THEME", theme)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(build(src, theme, frame=args.frame))
+        print("wrote", path)

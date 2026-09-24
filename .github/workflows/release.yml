@@ -92,17 +92,20 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # npmjs.com can't resolve the README's relative ./assets/ paths. Point them at
-      # this exact commit so each version's page shows the header it shipped with.
-      # Only the runner's copy changes; nothing is committed.
-      - name: Use absolute image URLs in README
+      # npm's README page wraps <img> in a link, which breaks <picture>, so it can't
+      # follow npm's theme toggle. Give npm a README with one framed SVG that follows
+      # the system theme and carries its own background, pinned to this commit so each
+      # version's page shows the header it shipped with. Only the runner's copy changes.
+      - name: Write npm README
         if: steps.version.outputs.changed == 'true' && steps.tag.outputs.exists != 'true' && steps.npm.outputs.published != 'true'
+        shell: bash
         run: |
-          sed -i "s#\./assets/#https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/assets/#g" README.md
-          if grep -q '\./assets/' README.md; then
-            echo "::error::README.md still has relative ./assets/ paths."
-            exit 1
-          fi
+          set -euo pipefail
+          IMG=assets/about-wide-framed-auto.svg
+          test -f "$IMG" || { echo "::error::$IMG is missing. Run ./build.sh."; exit 1; }
+          ALT=$(grep -o 'alt="[^"]*"' README.md | head -n 1)
+          test -n "$ALT" || { echo "::error::No alt text found in README.md."; exit 1; }
+          echo "<img ${ALT} src=\"https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/${IMG}\">" > README.md
           cat README.md
 
       - name: Publish to npm
