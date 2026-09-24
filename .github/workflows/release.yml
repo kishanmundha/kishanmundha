@@ -1,0 +1,144 @@
+name: Publish package on version change
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm
+        run: npm install -g npm@^11.5.1
+
+      - name: Detect version change
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "current=${CURRENT_VERSION}" >> "$GITHUB_OUTPUT"
+
+          BEFORE_SHA="${{ github.event.before }}"
+          if [[ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PREV_VERSION=""
+          if git cat-file -e "${BEFORE_SHA}:package.json" 2>/dev/null; then
+            PREV_VERSION=$(git show "${BEFORE_SHA}:package.json" | node -e "let data='';process.stdin.on('data',c=>data+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(data).version || '')}catch{console.log('')}})")
+          fi
+
+          if [[ "$CURRENT_VERSION" != "$PREV_VERSION" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check if tag exists
+        id: tag
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${{ steps.version.outputs.current }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check package on npm
+        id: npm
+        if: steps.version.outputs.changed == 'true' && steps.tag.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          if ! npm view "$PACKAGE_NAME" version >/dev/null 2>&1; then
+            echo "Package $PACKAGE_NAME does not exist on npm yet."
+            echo "Trusted Publisher generally requires existing package linkage in npm settings before CI publish."
+            echo "Do an initial manual publish once, then re-run this workflow for subsequent releases."
+            exit 1
+          fi
+          # A version published by hand (e.g. the first release) still gets its tag.
+          if npm view "${PACKAGE_NAME}@${{ steps.version.outputs.current }}" version 2>/dev/null | grep -q .; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # npmjs.com can't resolve the README's relative ./assets/ paths. Point them at
+      # this exact commit so each version's page shows the header it shipped with.
+      # Only the runner's copy changes; nothing is committed.
+      - name: Use absolute image URLs in README
+        if: steps.version.outputs.changed == 'true' && steps.tag.outputs.exists != 'true' && steps.npm.outputs.published != 'true'
+        run: |
+          sed -i "s#\./assets/#https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/assets/#g" README.md
+          if grep -q '\./assets/' README.md; then
+            echo "::error::README.md still has relative ./assets/ paths."
+            exit 1
+          fi
+          cat README.md
+
+      - name: Publish to npm
+        if: steps.version.outputs.changed == 'true' && steps.tag.outputs.exists != 'true' && steps.npm.outputs.published != 'true'
+        run: npm publish --access public --provenance
+
+      - name: Create and push git tag
+        if: steps.version.outputs.changed == 'true' && steps.tag.outputs.exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${{ steps.version.outputs.current }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          PREV_TAG=$(git tag --list "v*" --sort=-v:refname | head -n 1 || true)
+          if [[ -n "${PREV_TAG}" ]]; then
+            CHANGES=$(git log --pretty=format:'- %s (%h)' "${PREV_TAG}"..HEAD)
+          else
+            CHANGES=$(git log --pretty=format:'- %s (%h)')
+          fi
+
+          if [[ -z "${CHANGES}" ]]; then
+            CHANGES="- No commit messages found"
+          fi
+
+          {
+            echo "Release ${TAG}"
+            echo
+            if [[ -n "${PREV_TAG}" ]]; then
+              echo "Changes since ${PREV_TAG}:"
+            else
+              echo "Changes:"
+            fi
+            echo "${CHANGES}"
+          } > tag-message.txt
+
+          git tag -a "$TAG" -F tag-message.txt
+          git push origin "$TAG"

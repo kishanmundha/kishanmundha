@@ -1,0 +1,33 @@
+name: Check assets are up to date
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  assets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Rebuild SVGs
+        run: ./build.sh
+
+      - name: Fail if assets are stale
+        shell: bash
+        run: |
+          if ! git diff --exit-code --stat -- assets/ || [[ -n "$(git ls-files --others --exclude-standard -- assets/)" ]]; then
+            echo "::error::assets/ is out of date. Run ./build.sh and commit the regenerated SVGs."
+            exit 1
+          fi

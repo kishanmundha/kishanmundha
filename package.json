@@ -1,0 +1,22 @@
+{
+  "name": "kishanmundha",
+  "version": "1.0.0",
+  "description": "Kishan Mundha, as a terminal session. Run `npx kishanmundha`.",
+  "bin": {
+    "kishanmundha": "bin/about.js"
+  },
+  "files": [
+    "bin/about.js"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "author": "Kishan Mundha <kishan.mundha@gmail.com>",
+  "homepage": "https://github.com/kishanmundha",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kishanmundha/kishanmundha.git"
+  },
+  "keywords": ["profile", "about", "cli", "card"],
+  "license": "MIT"
+}

@@ -1,0 +1,104 @@
+# AGENTS.md
+
+GitHub profile README for Kishan Mundha (`github.com/kishanmundha`). The header is
+an animated SVG of a fake terminal session. The SVG is generated from a Node script
+and never edited by hand.
+
+## Layout
+
+| Path                                          | Role                                                                                                                             |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `README.md`                                   | The profile page. It holds only the `<picture>` header.                                                                          |
+| `bin/about.js`                                | **Source of truth for the header content.** A zero-dependency Node script that prints the profile as a colored terminal session. |
+| `tools/ansi2term.py`                          | Converts ANSI output into an animated terminal-window SVG, in dark and light themes. Stdlib only.                                |
+| `build.sh`                                    | Runs both of the above to regenerate every file in `assets/`.                                                                    |
+| `package.json`                                | Publishes `bin/about.js` to npm as `kishanmundha`, so `npx kishanmundha` works. Only that file ships.                            |
+| `assets/about-{wide,narrow}-{dark,light}.svg` | Generated output. **Never edit by hand.**                                                                                        |
+| `.github/workflows/assets.yml`                | CI check that `assets/` matches a fresh `./build.sh`.                                                                            |
+| `.github/workflows/release.yml`               | Publishes to npm when `version` changes. See "Releasing to npm".                                                                 |
+| `LICENSE`                                     | MIT.                                                                                                                             |
+
+## Build
+
+```bash
+./build.sh
+```
+
+Requires `node` and `python3`. There are no dependencies to install, and there is no
+test suite or linter. `package.json` exists only for npm publishing; keep `about.js`
+dependency-free. The build is deterministic: rebuilding with no
+source change leaves `git status` clean. Use that to check that a change touched
+only what you intended.
+
+To preview the output in a terminal:
+
+```bash
+node bin/about.js            # wide, ~76 cols
+node bin/about.js --narrow   # phone, ~36 cols
+```
+
+## How the pipeline works
+
+1. `bin/about.js` writes lines to stdout. Colors come from a small fixed palette of
+   SGR codes: `97`, `38;5;245`, `38;5;240`, `38;5;179`, `38;5;79` and `1` (bold).
+   Color is on when stdout is a TTY or `FORCE_COLOR` is set, and off under `NO_COLOR`.
+2. `tools/ansi2term.py <in.ansi> <out-THEME.svg>` writes one SVG per theme, replacing
+   `THEME` in the output path. It infers animation timing from the text:
+   - a line that starts with `❯` is typed out one character at a time
+   - on a line that contains `✓`, the text after the check mark appears a beat later
+   - a `\r` inside a line cross-fades the text before it into the text after it
+     (this is how `think()` swaps "thinking" for "thought for Xs")
+   - every other line fades in on a short beat
+
+## Rules and gotchas
+
+- **Wide and narrow are separate layouts, not one layout scaled down.** Each block in
+  `about.js` branches on `NARROW` and often has its own shorter copy (see the
+  `[wide, narrow]` pairs in `ask()`, `PROJECTS` and `CONTACT`). When you
+  change copy, update both variants and check both outputs.
+- Respect the column budgets: `WIDTH` is 76 wide and 36 narrow. Prose goes through
+  `para()`/`wrap()`. Fixed rows use `pad()`, which measures visible length with ANSI
+  codes stripped.
+- **If you add a color to `about.js`, add it to both `THEMES` maps in
+  `ansi2term.py`.** An unknown SGR code is silently rendered in the default color.
+- `ansi2term.py` places each whitespace-separated chunk at an absolute column, using
+  `CH = 8.16` px per character at `FONT = 13.6` px. These values match GitHub's code
+  font, so the header lines up with the README text around it. Don't change them.
+- In `README.md`, **don't add a `width=` attribute** to the `<img>` or `<picture>`.
+  The SVGs carry their intrinsic size, and scaling them breaks the type match.
+- The `<picture>` switches at `max-width: 800px` for narrow and on
+  `prefers-color-scheme` for dark. All four `srcset` paths must match the names
+  `build.sh` produces.
+- `ansi2term.py` must open its input with `newline=""`, or Python drops the `\r`
+  characters.
+- The SVGs honor `prefers-reduced-motion`. Keep that `@media` block when you edit the
+  CSS in `build()`.
+
+## Content status
+
+- The footer advertises `npx kishanmundha`. It runs the version last published to npm,
+  so after changing `about.js`, bump `version` in `package.json` and `npm publish`.
+- The README is only the `<picture>` header, on purpose. Don't add links or other
+  sections below it unless asked.
+
+## Workflow
+
+1. Edit `bin/about.js`, or `tools/ansi2term.py` for rendering changes.
+2. Run `./build.sh`.
+3. Commit the source change and the regenerated `assets/*.svg` together.
+
+`.github/workflows/assets.yml` reruns `./build.sh` on every push and pull request,
+and fails if `assets/` differs from what the source generates.
+
+## Releasing to npm
+
+`.github/workflows/release.yml` publishes when a push to `main` changes the `version`
+in `package.json`. It uses npm trusted publishing (OIDC, no token) with the GitHub
+environment `release`, then tags `vX.Y.Z`. If that version is already on npm (for
+example, published by hand), the workflow only creates the tag.
+
+Before publishing, the workflow rewrites the README's relative `./assets/` paths to
+`raw.githubusercontent.com` URLs pinned to the commit being released, so the header
+renders on npmjs.com. Keep the committed README on relative `./assets/` paths; the
+step fails if any are left after the rewrite. A manual `npm publish` skips this
+rewrite, so that version's npm page shows broken images.
